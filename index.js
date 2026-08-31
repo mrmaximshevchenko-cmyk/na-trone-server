@@ -71,7 +71,35 @@ app.get('/sessions/:userId', async (req, res) => {
     res.status(500).json({ ok: false, error: err.message })
   }
 })
-const PORT = process.env.PORT || 3001
+// ===== Telegram: ответ на /start =====
+const BOT_TOKEN = process.env.BOT_TOKEN
+const APP_URL = 'https://na-trone-app.onrender.com'
+
+app.post('/webhook', async (req, res) => {
+  try {
+    const msg = req.body.message
+    if (msg && msg.text && msg.text.startsWith('/start')) {
+      const chatId = msg.chat.id
+      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: 'Добро пожаловать на трон, Ваше Величество!',
+          reply_markup: {
+            inline_keyboard: [[
+              { text: 'Занять трон 👑', web_app: { url: APP_URL } }
+            ]]
+          }
+        }),
+      })
+    }
+    res.sendStatus(200)
+  } catch (err) {
+    console.log('Ошибка webhook:', err.message)
+    res.sendStatus(200)
+  }
+})
 
 app.listen(PORT, async () => {
   console.log(`Сервер запущен на порту ${PORT} 🚀`)
