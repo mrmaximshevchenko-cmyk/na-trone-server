@@ -101,6 +101,8 @@ app.post('/webhook', async (req, res) => {
   }
 })
 
+const PORT = process.env.PORT || 3001
+
 app.listen(PORT, async () => {
   console.log(`Сервер запущен на порту ${PORT} 🚀`)
   try {
