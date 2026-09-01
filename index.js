@@ -137,6 +137,63 @@ app.get('/leaderboard/week', async (req, res) => {
     res.status(500).json({ ok: false, error: err.message })
   }
 })
+// Месячный рейтинг по лучшему стрику (текущий календарный месяц)
+app.get('/leaderboard/month', async (req, res) => {
+  try {
+    // Берём все сеансы за текущий месяц вместе с данными юзеров
+    const result = await pool.query(`
+      SELECT s.user_id, s.id, u.username, u.first_name, u.avatar
+      FROM sessions s
+      INNER JOIN users u ON u.user_id = s.user_id
+      WHERE to_timestamp(s.id / 1000.0) >= date_trunc('month', NOW())
+    `)
+
+    // Группируем по юзеру
+    const byUser = {}
+    for (const row of result.rows) {
+      if (!byUser[row.user_id]) {
+        byUser[row.user_id] = {
+          user_id: row.user_id,
+          username: row.username,
+          first_name: row.first_name,
+          avatar: row.avatar,
+          ids: [],
+        }
+      }
+      byUser[row.user_id].ids.push(Number(row.id))
+    }
+
+    // Считаем лучший стрик (максимум дней подряд) в этом месяце
+    const dayKey = (ms) => {
+      const d = new Date(ms)
+      return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+    }
+    const bestStreak = (ids) => {
+      const days = [...new Set(ids.map(dayKey))]
+        .map((k) => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m, d).getTime() })
+        .sort((a, b) => a - b)
+      if (days.length === 0) return 0
+      let best = 1, run = 1
+      for (let i = 1; i < days.length; i++) {
+        const diff = (days[i] - days[i - 1]) / 86400000
+        if (diff === 1) { run++; if (run > best) best = run } else if (diff > 1) run = 1
+      }
+      return best
+    }
+
+    const list = Object.values(byUser).map((u) => ({
+      user_id: u.user_id,
+      username: u.username,
+      first_name: u.first_name,
+      avatar: u.avatar,
+      streak: bestStreak(u.ids),
+    }))
+    list.sort((a, b) => b.streak - a.streak)
+    res.json(list.slice(0, 100))
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
 // ===== Telegram: ответ на /start =====
 const BOT_TOKEN = process.env.BOT_TOKEN
 const APP_URL = 'https://na-trone-app.onrender.com'
