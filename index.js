@@ -384,6 +384,32 @@ app.post('/privacy', async (req, res) => {
     res.status(500).json({ ok: false, error: err.message })
   }
 })
+// Отправить юзеру картинку ачивки (для шаринга)
+app.post('/share-achievement', async (req, res) => {
+  try {
+    const { chat_id, ach_id, ach_name } = req.body
+    const imageUrl = `${APP_URL}/ach-memes/${ach_id}.jpg`
+    const caption = `🏆 Новое достижение на троне: «${ach_name}»!\n\nGo за мной 👑`
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id,
+        photo: imageUrl,
+        caption,
+        reply_markup: {
+          inline_keyboard: [[
+            { text: 'Занять трон 👑', url: 'https://t.me/natrone_bot/throne' }
+          ]]
+        }
+      }),
+    })
+    res.json({ ok: true })
+  } catch (err) {
+    console.log('Ошибка отправки картинки:', err.message)
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
 // ===== Telegram: ответ на /start =====
 const BOT_TOKEN = process.env.BOT_TOKEN
 const APP_URL = 'https://na-trone-app.onrender.com'
