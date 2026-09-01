@@ -326,6 +326,49 @@ app.get('/leaderboard/month/friends/:userId', async (req, res) => {
     res.status(500).json({ ok: false, error: err.message })
   }
 })
+// Статистика конкретного юзера (для чужого профиля)
+app.get('/stats/:userId', async (req, res) => {
+  try {
+    const uid = req.params.userId
+    // Данные юзера
+    const userRes = await pool.query(
+      'SELECT user_id, username, first_name, avatar FROM users WHERE user_id = $1',
+      [uid]
+    )
+    if (userRes.rows.length === 0) return res.json({ ok: false })
+    // Все его сеансы
+    const sessRes = await pool.query(
+      'SELECT rating, consistency, no_paper, sheets, id FROM sessions WHERE user_id = $1',
+      [uid]
+    )
+    const sessions = sessRes.rows
+    const total = sessions.length
+    const rated = sessions.filter((s) => s.rating > 0)
+    const avg = rated.length > 0
+      ? (rated.reduce((a, s) => a + s.rating, 0) / rated.length).toFixed(1)
+      : '—'
+    const totalSheets = sessions.reduce((a, s) => a + (s.no_paper ? 0 : s.sheets), 0)
+
+    // Лучший стрик за всё время
+    const dayKey = (ms) => { const d = new Date(Number(ms)); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}` }
+    const days = [...new Set(sessions.map((s) => dayKey(s.id)))]
+      .map((k) => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m, d).getTime() })
+      .sort((a, b) => a - b)
+    let bestStreak = days.length > 0 ? 1 : 0, run = 1
+    for (let i = 1; i < days.length; i++) {
+      const diff = (days[i] - days[i - 1]) / 86400000
+      if (diff === 1) { run++; if (run > bestStreak) bestStreak = run } else if (diff > 1) run = 1
+    }
+
+    res.json({
+      ok: true,
+      user: userRes.rows[0],
+      total, avg, totalSheets, bestStreak,
+    })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
 // ===== Telegram: ответ на /start =====
 const BOT_TOKEN = process.env.BOT_TOKEN
 const APP_URL = 'https://na-trone-app.onrender.com'
