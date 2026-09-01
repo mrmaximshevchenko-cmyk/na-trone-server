@@ -194,6 +194,22 @@ app.get('/leaderboard/month', async (req, res) => {
     res.status(500).json({ ok: false, error: err.message })
   }
 })
+// Поиск юзера по нику (username), без статистики
+app.get('/search/:nick', async (req, res) => {
+  try {
+    const nick = req.params.nick.replace(/^@/, '').toLowerCase()
+    const result = await pool.query(
+      `SELECT user_id, username, first_name, avatar
+       FROM users
+       WHERE LOWER(username) = $1
+       LIMIT 10`,
+      [nick]
+    )
+    res.json(result.rows)
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
 // ===== Telegram: ответ на /start =====
 const BOT_TOKEN = process.env.BOT_TOKEN
 const APP_URL = 'https://na-trone-app.onrender.com'
