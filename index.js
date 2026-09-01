@@ -111,6 +111,15 @@ app.post('/user', async (req, res) => {
     res.status(500).json({ ok: false, error: err.message })
   }
 })
+// Временный: посмотреть всех юзеров (для проверки)
+app.get('/users', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT user_id, username, first_name, avatar FROM users ORDER BY updated_at DESC')
+    res.json(result.rows)
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
 // ===== Telegram: ответ на /start =====
 const BOT_TOKEN = process.env.BOT_TOKEN
 const APP_URL = 'https://na-trone-app.onrender.com'
