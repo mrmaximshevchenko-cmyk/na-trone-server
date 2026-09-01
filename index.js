@@ -28,6 +28,27 @@ async function initDb() {
     )
   `)
   console.log('Таблица sessions готова ✅')
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      user_id TEXT PRIMARY KEY,
+      username TEXT,
+      first_name TEXT,
+      avatar TEXT,
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `)
+  console.log('Таблица users готова ✅')
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS follows (
+      follower_id TEXT NOT NULL,
+      following_id TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      PRIMARY KEY (follower_id, following_id)
+    )
+  `)
+  console.log('Таблица follows готова ✅')
 }
 
 // Тестовый маршрут
@@ -67,6 +88,25 @@ app.get('/sessions/:userId', async (req, res) => {
       [req.params.userId]
     )
     res.json(result.rows)
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+// Зарегистрировать / обновить пользователя (при входе)
+app.post('/user', async (req, res) => {
+  try {
+    const { user_id, username, first_name, avatar } = req.body
+    await pool.query(
+      `INSERT INTO users (user_id, username, first_name, avatar, updated_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET
+         username = EXCLUDED.username,
+         first_name = EXCLUDED.first_name,
+         avatar = EXCLUDED.avatar,
+         updated_at = NOW()`,
+      [user_id, username, first_name, avatar]
+    )
+    res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message })
   }
