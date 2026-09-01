@@ -35,9 +35,12 @@ async function initDb() {
       username TEXT,
       first_name TEXT,
       avatar TEXT,
+      is_private BOOLEAN DEFAULT FALSE,
       updated_at TIMESTAMP DEFAULT NOW()
     )
   `)
+  // На случай если таблица уже была — добавим колонку
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_private BOOLEAN DEFAULT FALSE`)
   console.log('Таблица users готова ✅')
 
   await pool.query(`
@@ -128,6 +131,7 @@ app.get('/leaderboard/week', async (req, res) => {
       FROM sessions s
       INNER JOIN users u ON u.user_id = s.user_id
       WHERE to_timestamp(s.id / 1000.0) >= date_trunc('week', NOW())
+        AND u.is_private = FALSE
       GROUP BY s.user_id, u.username, u.first_name, u.avatar
       ORDER BY count DESC
       LIMIT 100
@@ -146,6 +150,7 @@ app.get('/leaderboard/month', async (req, res) => {
       FROM sessions s
       INNER JOIN users u ON u.user_id = s.user_id
       WHERE to_timestamp(s.id / 1000.0) >= date_trunc('month', NOW())
+        AND u.is_private = FALSE
     `)
 
     // Группируем по юзеру
@@ -201,7 +206,7 @@ app.get('/search/:nick', async (req, res) => {
     const result = await pool.query(
       `SELECT user_id, username, first_name, avatar
        FROM users
-       WHERE LOWER(username) = $1
+       WHERE LOWER(username) = $1 AND is_private = FALSE
        LIMIT 10`,
       [nick]
     )
@@ -365,6 +370,16 @@ app.get('/stats/:userId', async (req, res) => {
       user: userRes.rows[0],
       total, avg, totalSheets, bestStreak,
     })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+// Переключить приватность
+app.post('/privacy', async (req, res) => {
+  try {
+    const { user_id, is_private } = req.body
+    await pool.query('UPDATE users SET is_private = $2 WHERE user_id = $1', [user_id, is_private])
+    res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message })
   }
