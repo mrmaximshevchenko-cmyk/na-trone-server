@@ -126,7 +126,7 @@ app.get('/leaderboard/week', async (req, res) => {
     const result = await pool.query(`
       SELECT s.user_id, u.username, u.first_name, u.avatar, COUNT(*) AS count
       FROM sessions s
-      LEFT JOIN users u ON u.user_id = s.user_id
+      INNER JOIN users u ON u.user_id = s.user_id
       WHERE to_timestamp(s.id / 1000.0) >= date_trunc('week', NOW())
       GROUP BY s.user_id, u.username, u.first_name, u.avatar
       ORDER BY count DESC
