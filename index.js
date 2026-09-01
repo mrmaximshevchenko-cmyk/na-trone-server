@@ -210,6 +210,53 @@ app.get('/search/:nick', async (req, res) => {
     res.status(500).json({ ok: false, error: err.message })
   }
 })
+// Добавить в друзья (взаимно — обе записи)
+app.post('/follow', async (req, res) => {
+  try {
+    const { me, target } = req.body
+    if (!me || !target || me === target) return res.json({ ok: false })
+    await pool.query(
+      `INSERT INTO follows (follower_id, following_id) VALUES ($1, $2), ($2, $1)
+       ON CONFLICT DO NOTHING`,
+      [me, target]
+    )
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+
+// Удалить из друзей (обе записи)
+app.post('/unfollow', async (req, res) => {
+  try {
+    const { me, target } = req.body
+    await pool.query(
+      `DELETE FROM follows WHERE (follower_id = $1 AND following_id = $2)
+       OR (follower_id = $2 AND following_id = $1)`,
+      [me, target]
+    )
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+
+// Список друзей юзера (с их данными)
+app.get('/friends/:userId', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT u.user_id, u.username, u.first_name, u.avatar
+       FROM follows f
+       INNER JOIN users u ON u.user_id = f.following_id
+       WHERE f.follower_id = $1
+       ORDER BY u.username`,
+      [req.params.userId]
+    )
+    res.json(result.rows)
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
 // ===== Telegram: ответ на /start =====
 const BOT_TOKEN = process.env.BOT_TOKEN
 const APP_URL = 'https://na-trone-app.onrender.com'
