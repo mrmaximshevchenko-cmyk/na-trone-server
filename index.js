@@ -120,6 +120,23 @@ app.get('/users', async (req, res) => {
     res.status(500).json({ ok: false, error: err.message })
   }
 })
+// Недельный рейтинг по числу сеансов (текущая календарная неделя, пн–вс)
+app.get('/leaderboard/week', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT s.user_id, u.username, u.first_name, u.avatar, COUNT(*) AS count
+      FROM sessions s
+      LEFT JOIN users u ON u.user_id = s.user_id
+      WHERE to_timestamp(s.id / 1000.0) >= date_trunc('week', NOW())
+      GROUP BY s.user_id, u.username, u.first_name, u.avatar
+      ORDER BY count DESC
+      LIMIT 100
+    `)
+    res.json(result.rows)
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
 // ===== Telegram: ответ на /start =====
 const BOT_TOKEN = process.env.BOT_TOKEN
 const APP_URL = 'https://na-trone-app.onrender.com'
