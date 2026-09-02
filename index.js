@@ -429,6 +429,12 @@ app.post('/webhook', async (req, res) => {
         hattrick: 'Хет-трик', streak3: 'Разогрев', streak7: 'Неделя дисциплины',
         loose: 'Прорыв плотины', hard: 'Каменная кладка', sausage10: 'Идеальная форма',
         spectrum: 'Полный спектр', artillery: 'Тяжёлая артиллерия',
+        alien: 'Контакт с иным разумом', nightwatch: 'Страж ночи', doomsday: 'Судный день',
+        clean: 'Чистая работа', rollercoaster: 'Американские горки', roadworks: 'Дорожные работы',
+        jackpot: 'Джекпот', prophecy: 'Пророчество сбылось', dragon: 'Победитель дракона',
+        ninja: 'Бесшумный ниндзя', blackstreak: 'Чёрная полоса', goat: 'Величайший из всех',
+        thirty: 'Ритуал полнолуния', timeless: 'Вне времени', zen: 'Мастер дзена',
+        reader: 'Конец есть!',
       }
       const achName = ACH_NAMES[achId] || achId
       const results = []
