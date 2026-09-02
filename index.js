@@ -384,12 +384,16 @@ app.post('/privacy', async (req, res) => {
     res.status(500).json({ ok: false, error: err.message })
   }
 })
-// Отправить юзеру картинку ачивки (для шаринга)
-app.post('/share-achievement', async (req, res) => {
+// Тихо отправить юзеру картинку полученной ачивки в чат с ботом
+app.post('/notify-achievement', async (req, res) => {
   try {
     const { chat_id, ach_id, ach_name } = req.body
+    // Только эти 10 «весёлых» ачивок шлём в чат
+    const ALLOWED = ['first','paperking','perfect','survival','aqua','double','hattrick','streak3','sausage10','artillery']
+    if (!ALLOWED.includes(ach_id)) return res.json({ ok: true, skipped: true })
+
     const imageUrl = `${APP_URL}/ach-memes/${ach_id}.jpg`
-    const caption = `🏆 Новое достижение на троне: «${ach_name}»!\n\nGo за мной 👑`
+    const caption = `🏆 Новое достижение: «${ach_name}»! 👑`
     await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -397,16 +401,12 @@ app.post('/share-achievement', async (req, res) => {
         chat_id,
         photo: imageUrl,
         caption,
-        reply_markup: {
-          inline_keyboard: [[
-            { text: 'Занять трон 👑', url: 'https://t.me/natrone_bot/throne' }
-          ]]
-        }
+        disable_notification: true,
       }),
     })
     res.json({ ok: true })
   } catch (err) {
-    console.log('Ошибка отправки картинки:', err.message)
+    console.log('Ошибка уведомления об ачивке:', err.message)
     res.status(500).json({ ok: false, error: err.message })
   }
 })
