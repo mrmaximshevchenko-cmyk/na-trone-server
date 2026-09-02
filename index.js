@@ -416,6 +416,39 @@ const APP_URL = 'https://na-trone-app.onrender.com'
 
 app.post('/webhook', async (req, res) => {
   try {
+    // Инлайн-запрос (шаринг ачивки картинкой)
+    const inlineQuery = req.body.inline_query
+    if (inlineQuery) {
+      const q = inlineQuery.query.trim()  // формат: "achId|achName"
+      const [achId, achName] = q.split('|')
+      const results = []
+      if (achId) {
+        const imageUrl = `${APP_URL}/ach-memes/${achId}.jpg`
+        results.push({
+          type: 'photo',
+          id: achId,
+          photo_url: imageUrl,
+          thumbnail_url: imageUrl,
+          caption: `🏆 Новое достижение на троне: «${achName || achId}»! 💩 Кто больше?`,
+          reply_markup: {
+            inline_keyboard: [[
+              { text: 'Занять трон 👑', url: 'https://t.me/natrone_bot/throne' }
+            ]]
+          }
+        })
+      }
+      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/answerInlineQuery`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          inline_query_id: inlineQuery.id,
+          results,
+          cache_time: 0,
+        }),
+      })
+      return res.sendStatus(200)
+    }
+
     const msg = req.body.message
     if (msg && msg.text && msg.text.startsWith('/start')) {
       const chatId = msg.chat.id
