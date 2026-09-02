@@ -389,7 +389,7 @@ app.post('/notify-achievement', async (req, res) => {
   try {
     const { chat_id, ach_id, ach_name } = req.body
     // Только эти 10 «весёлых» ачивок шлём в чат
-    const ALLOWED = ['first','paperking','perfect','survival','aqua','double','hattrick','streak3','sausage10','artillery']
+    const ALLOWED = ['first','paperking','perfect','survival','streak3','hattrick','alien','clean','rollercoaster','goat']
     if (!ALLOWED.includes(ach_id)) return res.json({ ok: true, skipped: true })
 
     const imageUrl = `${APP_URL}/ach-memes/${ach_id}.jpg`
