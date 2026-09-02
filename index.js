@@ -419,8 +419,18 @@ app.post('/webhook', async (req, res) => {
     // Инлайн-запрос (шаринг ачивки картинкой)
     const inlineQuery = req.body.inline_query
     if (inlineQuery) {
-      const q = inlineQuery.query.trim()  // формат: "achId|achName"
-      const [achId, achName] = q.split('|')
+      const achId = inlineQuery.query.trim()
+      // Названия ачивок (id -> имя) для подписи
+      const ACH_NAMES = {
+        first: 'Первое приземление', five: 'Пятёрочка', ten: 'Десятка сходов',
+        hundred: 'Центурион', perfect: 'Идеальный дроп', paperking: 'Бумажный король',
+        ecoguard: 'Страж природы', survival: 'Режим выживания', aqua: 'Аквавоин',
+        earlybird: 'Ранняя пташка', midnight: 'Полуночник', double: 'Дубль',
+        hattrick: 'Хет-трик', streak3: 'Разогрев', streak7: 'Неделя дисциплины',
+        loose: 'Прорыв плотины', hard: 'Каменная кладка', sausage10: 'Идеальная форма',
+        spectrum: 'Полный спектр', artillery: 'Тяжёлая артиллерия',
+      }
+      const achName = ACH_NAMES[achId] || achId
       const results = []
       if (achId) {
         const imageUrl = `${APP_URL}/ach-memes/${achId}.jpg`
@@ -429,7 +439,7 @@ app.post('/webhook', async (req, res) => {
           id: achId,
           photo_url: imageUrl,
           thumbnail_url: imageUrl,
-          caption: `🏆 Новое достижение на троне: «${achName || achId}»! 💩 Кто больше?`,
+          caption: `🏆 Новое достижение на троне: «${achName}»! 💩 Кто больше?`,
           reply_markup: {
             inline_keyboard: [[
               { text: 'Занять трон 👑', url: 'https://t.me/natrone_bot/throne' }
