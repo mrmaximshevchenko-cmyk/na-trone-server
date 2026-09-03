@@ -454,14 +454,6 @@ async function notifyFriendsAboutSession(authorId, sessionId) {
     const author = authorRes.rows[0]
     if (author.is_private) return
 
-    // Первый ли это сеанс автора за сегодня? (считаем сеансы за текущий день)
-    const countRes = await pool.query(
-      `SELECT COUNT(*) FROM sessions
-       WHERE user_id = $1 AND to_timestamp(id / 1000.0)::date = to_timestamp($2 / 1000.0)::date`,
-      [authorId, sessionId]
-    )
-    if (Number(countRes.rows[0].count) > 1) return // уже был сеанс сегодня
-
     // Кто подписан на автора (его друзья) и у кого включены уведомления
     const friendsRes = await pool.query(
       `SELECT u.user_id FROM follows f
