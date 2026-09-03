@@ -41,6 +41,7 @@ async function initDb() {
   `)
   // На случай если таблица уже была — добавим колонку
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_private BOOLEAN DEFAULT FALSE`)
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_friends BOOLEAN DEFAULT TRUE`)
   console.log('Таблица users готова ✅')
 
   await pool.query(`
@@ -78,6 +79,8 @@ app.post('/sessions', async (req, res) => {
       [id, user_id, rating, amount, consistency, sheets, no_paper]
     )
     res.json({ ok: true })
+    // Уведомить друзей (не блокируя ответ)
+    notifyFriendsAboutSession(user_id, id)
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message })
   }
@@ -410,6 +413,82 @@ app.post('/notify-achievement', async (req, res) => {
     res.status(500).json({ ok: false, error: err.message })
   }
 })
+// Вкл/выкл уведомления о друзьях
+app.post('/notify-setting', async (req, res) => {
+  try {
+    const { user_id, notify } = req.body
+    await pool.query('UPDATE users SET notify_friends = $2 WHERE user_id = $1', [user_id, notify])
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+
+// Тексты уведомлений о друзьях (рандом)
+const FRIEND_NOTIFS = [
+  'Милорд, ваш подданный {друг} только что встал с трона. А вы когда соизволите? 👑',
+  '👑 {друг} исполнил свой королевский долг. Не отставайте, Ваше Величество!',
+  '💩 {друг} только что покорил трон. Престол ждёт и вас!',
+  'Внимание, двор! {друг} совершил визит на трон. Ваш ход, монарх 👑',
+  '🚽 {друг} отметился на престоле. А ваш трон пылится?',
+  'Милорд, {друг} опережает вас на один поход. Терпимо ли это? 🔥',
+  'Слухи по королевству: {друг} сходил на трон. Пора и вам, Ваше Величество 💩',
+  '🔔 {друг} занял престол. Корона зовёт и вас!',
+  '{друг} совершил великое дело на троне. А чем похвастаетесь вы? 👑',
+  '💩 Пока вы медлите, {друг} уже покорил трон. Догоняйте!',
+  'Ваше Величество, {друг} только что отрёкся от трона (временно). Престол свободен! 👑',
+  '🚽 {друг} справил королевскую нужду. Не пора ли и вам на аудиенцию?',
+  'Депеша из уборной: {друг} на троне. Ваш престол скучает 👑',
+  '🔥 {друг} вырвался вперёд одним походом. Так и будете смотреть?',
+  '👑 Придворные шепчутся: {друг} снова на троне. Составите компанию?',
+  '{друг} совершил акт державной важности на троне. Ваш выход, монарх! 💩',
+  'Милорд, {друг} только что короновался на фарфоровом престоле. Не отставайте 👑',
+]
+
+// Уведомить друзей о походе (первый за день)
+async function notifyFriendsAboutSession(authorId, sessionId) {
+  try {
+    // Автор приватный? Не анонсируем
+    const authorRes = await pool.query('SELECT username, first_name, is_private FROM users WHERE user_id = $1', [authorId])
+    if (authorRes.rows.length === 0) return
+    const author = authorRes.rows[0]
+    if (author.is_private) return
+
+    // Первый ли это сеанс автора за сегодня? (считаем сеансы за текущий день)
+    const countRes = await pool.query(
+      `SELECT COUNT(*) FROM sessions
+       WHERE user_id = $1 AND to_timestamp(id / 1000.0)::date = to_timestamp($2 / 1000.0)::date`,
+      [authorId, sessionId]
+    )
+    if (Number(countRes.rows[0].count) > 1) return // уже был сеанс сегодня
+
+    // Кто подписан на автора (его друзья) и у кого включены уведомления
+    const friendsRes = await pool.query(
+      `SELECT u.user_id FROM follows f
+       INNER JOIN users u ON u.user_id = f.follower_id
+       WHERE f.following_id = $1 AND u.notify_friends = TRUE`,
+      [authorId]
+    )
+
+    const authorName = author.username || author.first_name || 'Кто-то'
+    for (const row of friendsRes.rows) {
+      const chatId = row.user_id.replace('tg_', '')
+      if (!/^\d+$/.test(chatId)) continue // только реальные tg-id
+      const text = FRIEND_NOTIFS[Math.floor(Math.random() * FRIEND_NOTIFS.length)].replace('{друг}', authorName)
+      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text,
+          reply_markup: { inline_keyboard: [[{ text: 'Занять трон 👑', web_app: { url: APP_URL } }]] },
+        }),
+      })
+    }
+  } catch (err) {
+    console.log('Ошибка уведомления друзей:', err.message)
+  }
+}
 // ===== Telegram: ответ на /start =====
 const BOT_TOKEN = process.env.BOT_TOKEN
 const APP_URL = 'https://na-trone-app.onrender.com'
