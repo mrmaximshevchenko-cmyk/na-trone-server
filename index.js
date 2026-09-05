@@ -70,7 +70,16 @@ async function initDb() {
       PRIMARY KEY (user_id, reason)
     )
   `)
-  console.log('Таблицы coins и coin_log готовы ✅')
+  await pool.query(`ALTER TABLE coins ADD COLUMN IF NOT EXISTS selected_skin TEXT`)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS owned_skins (
+      user_id TEXT NOT NULL,
+      skin_id TEXT NOT NULL,
+      bought_at TIMESTAMP DEFAULT NOW(),
+      PRIMARY KEY (user_id, skin_id)
+    )
+  `)
+  console.log('Таблицы coins, coin_log, owned_skins готовы ✅')
 }
 
 // Тестовый маршрут
@@ -577,7 +586,91 @@ app.post('/webhook', async (req, res) => {
     res.sendStatus(200)
   }
 })
+// ===== МАГАЗИН СКИНОВ =====
 
+// Конфиг скинов. tier: common/rare/epic/legendary/mythic. free: бесплатные (текущие авы)
+// Добавить новый скин = просто дописать сюда + залить картинку в public/skins/{id}.jpg
+const SKINS = [
+  // Бесплатные (текущие аватарки) — цена 0, тир free
+  { id: 'king', tier: 'free', price: 0 },
+  { id: 'gym', tier: 'free', price: 0 },
+  { id: 'cool', tier: 'free', price: 0 },
+  { id: 'gamer', tier: 'free', price: 0 },
+  { id: 'zen', tier: 'free', price: 0 },
+  // ЗАГЛУШКИ для теста разных тиров (потом заменим на реальные скины)
+  { id: 'test_common', tier: 'common', price: 400 },
+  { id: 'test_rare', tier: 'rare', price: 1200 },
+  { id: 'test_epic', tier: 'epic', price: 3500 },
+  { id: 'test_legendary', tier: 'legendary', price: 7000 },
+  { id: 'test_mythic', tier: 'mythic', price: 13000 },
+]
+
+const TIER_ORDER = { free: 0, common: 1, rare: 2, epic: 3, legendary: 4, mythic: 5 }
+
+// Отдать магазин: скины + что куплено + баланс + выбранный
+app.get('/shop/:userId', async (req, res) => {
+  try {
+    const uid = req.params.userId
+    const bal = await pool.query('SELECT balance, selected_skin FROM coins WHERE user_id = $1', [uid])
+    const owned = await pool.query('SELECT skin_id FROM owned_skins WHERE user_id = $1', [uid])
+    const ownedIds = owned.rows.map(r => r.skin_id)
+    res.json({
+      balance: bal.rows[0]?.balance || 0,
+      selected: bal.rows[0]?.selected_skin || 'king',
+      owned: ownedIds,
+      skins: SKINS,
+    })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+
+// Купить скин (проверка баланса на сервере — защита)
+app.post('/buy-skin', async (req, res) => {
+  try {
+    const { user_id, skin_id } = req.body
+    const skin = SKINS.find(s => s.id === skin_id)
+    if (!skin) return res.json({ ok: false, error: 'no_skin' })
+    if (skin.tier === 'free') return res.json({ ok: false, error: 'free' })
+
+    // Уже куплен?
+    const own = await pool.query('SELECT 1 FROM owned_skins WHERE user_id = $1 AND skin_id = $2', [user_id, skin_id])
+    if (own.rows.length > 0) return res.json({ ok: false, error: 'owned' })
+
+    // Хватает ли монет?
+    const bal = await pool.query('SELECT balance FROM coins WHERE user_id = $1', [user_id])
+    const balance = bal.rows[0]?.balance || 0
+    if (balance < skin.price) return res.json({ ok: false, error: 'not_enough', balance })
+
+    // Списываем + записываем владение
+    await pool.query('UPDATE coins SET balance = balance - $2 WHERE user_id = $1', [user_id, skin.price])
+    await pool.query('INSERT INTO owned_skins (user_id, skin_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [user_id, skin_id])
+    res.json({ ok: true, balance: balance - skin.price })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+
+// Выбрать активный скин (должен быть бесплатным или купленным)
+app.post('/select-skin', async (req, res) => {
+  try {
+    const { user_id, skin_id } = req.body
+    const skin = SKINS.find(s => s.id === skin_id)
+    if (!skin) return res.json({ ok: false, error: 'no_skin' })
+    if (skin.tier !== 'free') {
+      const own = await pool.query('SELECT 1 FROM owned_skins WHERE user_id = $1 AND skin_id = $2', [user_id, skin_id])
+      if (own.rows.length === 0) return res.json({ ok: false, error: 'not_owned' })
+    }
+    await pool.query(
+      `INSERT INTO coins (user_id, selected_skin) VALUES ($1, $2)
+       ON CONFLICT (user_id) DO UPDATE SET selected_skin = $2`,
+      [user_id, skin_id]
+    )
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
 const PORT = process.env.PORT || 3001
 // ===== ЭКОНОМИКА: КАКАКОИНЫ =====
 
