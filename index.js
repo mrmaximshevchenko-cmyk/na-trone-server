@@ -53,6 +53,24 @@ async function initDb() {
     )
   `)
   console.log('Таблица follows готова ✅')
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS coins (
+      user_id TEXT PRIMARY KEY,
+      balance INTEGER DEFAULT 0,
+      coins_onboarded BOOLEAN DEFAULT FALSE
+    )
+  `)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS coin_log (
+      user_id TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      amount INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      PRIMARY KEY (user_id, reason)
+    )
+  `)
+  console.log('Таблицы coins и coin_log готовы ✅')
 }
 
 // Тестовый маршрут
@@ -561,7 +579,147 @@ app.post('/webhook', async (req, res) => {
 })
 
 const PORT = process.env.PORT || 3001
+// ===== ЭКОНОМИКА: КАКАКОИНЫ =====
 
+// Сколько монет за каждую ачивку
+const ACH_COINS = {
+  // Лёгкие обычные — 50
+  first: 50, five: 50, aqua: 50, loose: 50, earlybird: 50, midnight: 50,
+  // Средние обычные — 100
+  ten: 100, ecoguard: 100, survival: 100, paperking: 100, double: 100, streak3: 100, hard: 100, artillery: 100,
+  // Сложные обычные — 200
+  perfect: 200, hattrick: 200, streak7: 200, sausage10: 200, spectrum: 200, hundred: 200,
+  // Обычные секретки — 300
+  alien: 300, nightwatch: 300, jackpot: 300, roadworks: 300, blackstreak: 300,
+  clean: 300, rollercoaster: 300, ninja: 300, thirty: 300, timeless: 300, reader: 300,
+  // Хардкорные секретки — 500
+  doomsday: 500, prophecy: 500, dragon: 500, goat: 500, zen: 500,
+}
+
+const OLDBIE_BONUS = 500 // бонус старожила
+
+// --- Логика ачивок на сервере (проверка по истории) ---
+function achDayKey(ms) { const d = new Date(Number(ms)); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}` }
+function achHour(ms) { return new Date(Number(ms)).getHours() }
+function achMaxPerDay(h) {
+  const map = {}; h.forEach(s => { const k = achDayKey(s.id); map[k] = (map[k]||0)+1 }); return Math.max(0, ...Object.values(map))
+}
+function achStreak(h) {
+  if (!h.length) return 0
+  const days = new Set(h.map(s => achDayKey(s.id)))
+  let streak = 0; const c = new Date()
+  if (!days.has(achDayKey(c.getTime()))) c.setDate(c.getDate()-1)
+  while (days.has(achDayKey(c.getTime()))) { streak++; c.setDate(c.getDate()-1) }
+  return streak
+}
+function achHasStreakOf(h, n, test) {
+  const arr = [...h].sort((a,b)=>a.id-b.id); let c = 0
+  for (const s of arr) { if (test(s)) { c++; if (c>=n) return true } else c = 0 }
+  return false
+}
+function achAllDayparts(h) {
+  let m=false,d=false,e=false,n=false
+  h.forEach(s => { const x=achHour(s.id); if(x>=5&&x<12)m=true; else if(x>=12&&x<18)d=true; else if(x>=18&&x<23)e=true; else n=true })
+  return m&&d&&e&&n
+}
+
+// Возвращает список id выполненных ачивок по истории (h: массив сессий из БД)
+function getUnlockedServer(h) {
+  const S = h.map(r => ({ id: Number(r.id), rating: r.rating, amount: r.amount, consistency: r.consistency, sheets: r.sheets, noPaper: r.no_paper }))
+  const ids = []
+  const add = (id, cond) => { if (cond) ids.push(id) }
+  const some = (fn) => S.some(fn)
+  add('first', S.length>=1); add('five', S.length>=5); add('ten', S.length>=10); add('hundred', S.length>=100)
+  add('perfect', some(s=>s.rating===10&&s.consistency==='Колбаска'))
+  add('paperking', some(s=>!s.noPaper&&s.sheets>10))
+  add('ecoguard', some(s=>!s.noPaper&&s.sheets>0&&s.sheets<=2))
+  add('survival', some(s=>!s.noPaper&&s.sheets===1))
+  add('aqua', some(s=>s.noPaper))
+  add('earlybird', some(s=>achHour(s.id)>=5&&achHour(s.id)<7))
+  add('midnight', some(s=>achHour(s.id)>=0&&achHour(s.id)<5))
+  add('double', achMaxPerDay(S)>=2); add('hattrick', achMaxPerDay(S)>=3)
+  add('streak3', achStreak(S)>=3); add('streak7', achStreak(S)>=7)
+  add('loose', some(s=>s.consistency==='Жидко')); add('hard', some(s=>s.consistency==='Сухари'))
+  add('sausage10', S.filter(s=>s.consistency==='Колбаска').length>=10)
+  add('spectrum', ['Жидко','Мягко','Колбаска','Сухари'].every(c=>some(s=>s.consistency===c)))
+  add('artillery', S.filter(s=>s.amount==='Куча').length>=3)
+  add('alien', some(s=>s.rating===1))
+  add('nightwatch', some(s=>achHour(s.id)>=2&&achHour(s.id)<4))
+  add('doomsday', achMaxPerDay(S)>=5)
+  add('clean', some(s=>s.rating===10&&s.noPaper))
+  add('jackpot', some(s=>{const d=new Date(s.id);return d.getHours()===0&&d.getMinutes()<10}))
+  add('prophecy', achHasStreakOf(S,7,s=>s.rating===7))
+  add('dragon', some(s=>s.amount==='Куча'&&!s.noPaper&&s.sheets>10))
+  add('ninja', S.filter(s=>s.noPaper).length>=5)
+  add('blackstreak', achHasStreakOf(S,3,s=>s.rating>=1&&s.rating<=3))
+  add('goat', achHasStreakOf(S,10,s=>s.rating>=8))
+  add('thirty', S.length>=30)
+  add('timeless', achAllDayparts(S))
+  add('zen', achHasStreakOf(S,3,s=>s.rating===10))
+  return ids
+}
+
+// Начислить монеты (с защитой от повтора через coin_log)
+async function grantCoins(userId, reason, amount) {
+  try {
+    const ins = await pool.query(
+      `INSERT INTO coin_log (user_id, reason, amount) VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, reason) DO NOTHING RETURNING amount`,
+      [userId, reason, amount]
+    )
+    if (ins.rows.length > 0) {
+      await pool.query(
+        `INSERT INTO coins (user_id, balance) VALUES ($1, $2)
+         ON CONFLICT (user_id) DO UPDATE SET balance = coins.balance + $2`,
+        [userId, amount]
+      )
+      return amount
+    }
+    return 0
+  } catch (err) { console.log('grantCoins err:', err.message); return 0 }
+}
+
+// Пересчитать и доначислить монеты юзеру (ачивки + бонус старожила)
+async function recalcCoins(userId) {
+  const sess = await pool.query('SELECT id, rating, amount, consistency, sheets, no_paper FROM sessions WHERE user_id = $1', [userId])
+  const unlocked = getUnlockedServer(sess.rows)
+  for (const achId of unlocked) {
+    const amount = ACH_COINS[achId] || 0
+    if (amount > 0) await grantCoins(userId, 'ach_' + achId, amount)
+  }
+  // Бонус старожила — всем, у кого есть хоть одна сессия
+  if (sess.rows.length > 0) await grantCoins(userId, 'oldbie_bonus', OLDBIE_BONUS)
+}
+
+// Получить баланс и разбивку
+app.get('/coins/:userId', async (req, res) => {
+  try {
+    await recalcCoins(req.params.userId)
+    const bal = await pool.query('SELECT balance, coins_onboarded FROM coins WHERE user_id = $1', [req.params.userId])
+    const log = await pool.query('SELECT reason, amount FROM coin_log WHERE user_id = $1', [req.params.userId])
+    res.json({
+      balance: bal.rows[0]?.balance || 0,
+      onboarded: bal.rows[0]?.coins_onboarded || false,
+      log: log.rows,
+    })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+
+// Отметить, что онбординг монет показан
+app.post('/coins-onboarded', async (req, res) => {
+  try {
+    await pool.query(
+      `INSERT INTO coins (user_id, coins_onboarded) VALUES ($1, TRUE)
+       ON CONFLICT (user_id) DO UPDATE SET coins_onboarded = TRUE`,
+      [req.body.user_id]
+    )
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
 app.listen(PORT, async () => {
   console.log(`Сервер запущен на порту ${PORT} 🚀`)
   try {
