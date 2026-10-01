@@ -79,7 +79,18 @@ async function initDb() {
       PRIMARY KEY (user_id, skin_id)
     )
   `)
-  console.log('Таблицы coins, coin_log, owned_skins готовы ✅')
+  // Тапалка: дневной счётчик натапанного
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS taps (
+      user_id TEXT NOT NULL,
+      tap_date DATE NOT NULL,
+      earned INTEGER DEFAULT 0,
+      PRIMARY KEY (user_id, tap_date)
+    )
+  `)
+  // Сила тапа (сколько KAKA даёт один тап)
+  await pool.query(`ALTER TABLE coins ADD COLUMN IF NOT EXISTS tap_power INTEGER DEFAULT 1`)
+  console.log('Таблицы coins, coin_log, owned_skins, taps готовы ✅')
 }
 
 // Тестовый маршрут
@@ -785,6 +796,106 @@ async function recalcCoins(userId) {
 }
 
 // Получить баланс и разбивку
+// ===== ТАПАЛКА =====
+const DAILY_TAP_LIMIT = 1000  // максимум KAKA с тапов в день
+
+// Состояние тапалки: сила тапа + сколько натапано сегодня
+app.get('/tap-state/:userId', async (req, res) => {
+  try {
+    const uid = req.params.userId
+    const c = await pool.query('SELECT tap_power FROM coins WHERE user_id = $1', [uid])
+    const t = await pool.query(
+      "SELECT earned FROM taps WHERE user_id = $1 AND tap_date = CURRENT_DATE", [uid]
+    )
+    res.json({
+      tapPower: c.rows[0]?.tap_power || 1,
+      earnedToday: t.rows[0]?.earned || 0,
+      dailyLimit: DAILY_TAP_LIMIT,
+    })
+  } catch (err) {
+    console.log('tap-state err:', err.message)
+    res.json({ tapPower: 1, earnedToday: 0, dailyLimit: DAILY_TAP_LIMIT })
+  }
+})
+
+// Приём пачки тапов. Тело: { user_id, taps } — сколько тапов сделано с прошлой отправки
+app.post('/tap', async (req, res) => {
+  try {
+    const { user_id, taps } = req.body
+    if (!user_id || !taps || taps < 1) return res.json({ ok: false })
+
+    // сила тапа
+    const c = await pool.query('SELECT tap_power FROM coins WHERE user_id = $1', [user_id])
+    const tapPower = c.rows[0]?.tap_power || 1
+
+    // сколько уже натапано сегодня
+    const t = await pool.query(
+      "SELECT earned FROM taps WHERE user_id = $1 AND tap_date = CURRENT_DATE", [user_id]
+    )
+    const earnedToday = t.rows[0]?.earned || 0
+
+    // сколько хотим начислить, но не выше дневного лимита
+    let add = taps * tapPower
+    const room = DAILY_TAP_LIMIT - earnedToday
+    if (add > room) add = room
+    if (add < 0) add = 0
+
+    if (add > 0) {
+      // пишем в дневной счётчик
+      await pool.query(
+        `INSERT INTO taps (user_id, tap_date, earned) VALUES ($1, CURRENT_DATE, $2)
+         ON CONFLICT (user_id, tap_date) DO UPDATE SET earned = taps.earned + $2`,
+        [user_id, add]
+      )
+      // пишем в общий баланс
+      await pool.query(
+        `INSERT INTO coins (user_id, balance) VALUES ($1, $2)
+         ON CONFLICT (user_id) DO UPDATE SET balance = coins.balance + $2`,
+        [user_id, add]
+      )
+    }
+
+    const balRow = await pool.query('SELECT balance FROM coins WHERE user_id = $1', [user_id])
+    res.json({
+      ok: true,
+      added: add,
+      balance: balRow.rows[0]?.balance || 0,
+      earnedToday: earnedToday + add,
+      dailyLimit: DAILY_TAP_LIMIT,
+    })
+  } catch (err) {
+    console.log('tap err:', err.message)
+    res.json({ ok: false })
+  }
+})
+
+// Прокачка силы тапа
+const TAP_UPGRADE_COST = [0, 500, 1500, 4000, 10000, 25000]  // цена перехода на ур. index+1
+app.post('/tap-upgrade', async (req, res) => {
+  try {
+    const { user_id } = req.body
+    const c = await pool.query('SELECT balance, tap_power FROM coins WHERE user_id = $1', [user_id])
+    const balance = c.rows[0]?.balance || 0
+    const power = c.rows[0]?.tap_power || 1
+
+    if (power >= TAP_UPGRADE_COST.length) {
+      return res.json({ ok: false, error: 'max', tapPower: power, balance })
+    }
+    const cost = TAP_UPGRADE_COST[power]  // цена следующего уровня
+    if (balance < cost) {
+      return res.json({ ok: false, error: 'not_enough', tapPower: power, balance })
+    }
+    await pool.query(
+      'UPDATE coins SET balance = balance - $2, tap_power = tap_power + 1 WHERE user_id = $1',
+      [user_id, cost]
+    )
+    res.json({ ok: true, tapPower: power + 1, balance: balance - cost })
+  } catch (err) {
+    console.log('tap-upgrade err:', err.message)
+    res.json({ ok: false })
+  }
+})
+
 app.get('/coins/:userId', async (req, res) => {
   try {
     await recalcCoins(req.params.userId)
