@@ -98,6 +98,16 @@ async function initDb() {
       streak INTEGER DEFAULT 0
     )
   `)
+    // Рефералы (кто кого пригласил, активирован ли бонус)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS referrals (
+      invited_id TEXT PRIMARY KEY,
+      inviter_id TEXT NOT NULL,
+      activated BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `)
+  // Лог всех начислений с датой (заработок по дням для календаря)
     await pool.query(`
     CREATE TABLE IF NOT EXISTS earn_log (
       id BIGSERIAL PRIMARY KEY,
@@ -137,6 +147,8 @@ app.post('/sessions', async (req, res) => {
     res.json({ ok: true })
     // Уведомить друзей (не блокируя ответ)
     notifyFriendsAboutSession(user_id, id)
+    // Реф-бонус: если это первый поход приглашённого — наградить обоих
+    activateReferral(user_id)
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message })
   }
@@ -311,6 +323,26 @@ app.get('/search/:nick', async (req, res) => {
     res.status(500).json({ ok: false, error: err.message })
   }
 })
+// Сохранить реф-связь при входе по ссылке (бонус НЕ даём — только при первом походе)
+app.post('/invite', async (req, res) => {
+  try {
+    const { invited, inviter } = req.body
+    if (!invited || !inviter || invited === inviter) return res.json({ ok: false })
+    // записываем только если у приглашённого ещё нет пригласителя и он новый (без сеансов)
+    const hasSession = await pool.query('SELECT 1 FROM sessions WHERE user_id = $1 LIMIT 1', [invited])
+    if (hasSession.rows.length > 0) return res.json({ ok: false, reason: 'not_new' })
+    await pool.query(
+      `INSERT INTO referrals (invited_id, inviter_id) VALUES ($1, $2)
+       ON CONFLICT (invited_id) DO NOTHING`,
+      [invited, inviter]
+    )
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+
+app.post('/follow', async (req, res) => {
 // Добавить в друзья (взаимно — обе записи)
 app.post('/follow', async (req, res) => {
   try {
@@ -817,7 +849,30 @@ function getUnlockedServer(h) {
   add('zen', achHasStreakOf(S,3,s=>s.rating===10))
   return ids
 }
+// Активация реф-бонуса: вызывается при записи сеанса
+const REF_BONUS = 500
+async function activateReferral(invitedId) {
+  try {
+    const r = await pool.query(
+      'SELECT inviter_id FROM referrals WHERE invited_id = $1 AND activated = FALSE', [invitedId]
+    )
+    if (r.rows.length === 0) return
+    const inviterId = r.rows[0].inviter_id
+    // помечаем активированным (чтобы не начислить дважды)
+    await pool.query('UPDATE referrals SET activated = TRUE WHERE invited_id = $1', [invitedId])
+    // начисляем обоим
+    for (const uid of [invitedId, inviterId]) {
+      await pool.query(
+        `INSERT INTO coins (user_id, balance) VALUES ($1, $2)
+         ON CONFLICT (user_id) DO UPDATE SET balance = coins.balance + $2`, [uid, REF_BONUS]
+      )
+      await logEarn(uid, REF_BONUS, 'referral')
+    }
+    console.log(`Реф-бонус: ${invitedId} + ${inviterId} по ${REF_BONUS}`)
+  } catch (err) { console.log('activateReferral err:', err.message) }
+}
 
+async function logEarn(userId, amount, kind) {
 // Начислить монеты (с защитой от повтора через coin_log)
 async function logEarn(userId, amount, kind) {
   try {
