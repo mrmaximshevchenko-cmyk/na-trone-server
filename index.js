@@ -90,7 +90,15 @@ async function initDb() {
   `)
   // Сила тапа (сколько KAKA даёт один тап)
   await pool.query(`ALTER TABLE coins ADD COLUMN IF NOT EXISTS tap_power INTEGER DEFAULT 1`)
-  console.log('Таблицы coins, coin_log, owned_skins, taps готовы ✅')
+  // Daily streak (ежедневный вход)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS daily_checkin (
+      user_id TEXT PRIMARY KEY,
+      last_date DATE,
+      streak INTEGER DEFAULT 0
+    )
+  `)
+  console.log('Таблицы coins, coin_log, owned_skins, taps, daily_checkin готовы ✅')
 }
 
 // Тестовый маршрут
@@ -764,6 +772,14 @@ function getUnlockedServer(h) {
 }
 
 // Начислить монеты (с защитой от повтора через coin_log)
+async function logEarn(userId, amount, kind) {
+  try {
+    if (amount > 0) await pool.query(
+      'INSERT INTO earn_log (user_id, amount, kind) VALUES ($1, $2, $3)', [userId, amount, kind]
+    )
+  } catch (err) { console.log('logEarn err:', err.message) }
+}
+
 async function grantCoins(userId, reason, amount) {
   try {
     const ins = await pool.query(
@@ -777,6 +793,7 @@ async function grantCoins(userId, reason, amount) {
          ON CONFLICT (user_id) DO UPDATE SET balance = coins.balance + $2`,
         [userId, amount]
       )
+      await logEarn(userId, amount, reason.startsWith('ach_') ? 'achievement' : reason)
       return amount
     }
     return 0
@@ -853,6 +870,7 @@ app.post('/tap', async (req, res) => {
          ON CONFLICT (user_id) DO UPDATE SET balance = coins.balance + $2`,
         [user_id, add]
       )
+      await logEarn(user_id, add, 'tap')
     }
 
     const balRow = await pool.query('SELECT balance FROM coins WHERE user_id = $1', [user_id])
@@ -893,6 +911,83 @@ app.post('/tap-upgrade', async (req, res) => {
   } catch (err) {
     console.log('tap-upgrade err:', err.message)
     res.json({ ok: false })
+  }
+})
+
+// ===== DAILY STREAK =====
+// Награда по дню стрика (день 1..7+), дальше кап
+const DAILY_REWARDS = [100, 200, 350, 500, 700, 850, 1000]
+function dailyReward(streak) {
+  const i = Math.min(streak, DAILY_REWARDS.length) - 1
+  return DAILY_REWARDS[Math.max(0, i)]
+}
+
+// Ежедневный чек-ин: вызывается при входе
+app.post('/daily-checkin', async (req, res) => {
+  try {
+    const { user_id } = req.body
+    if (!user_id) return res.json({ ok: false })
+
+    const row = await pool.query('SELECT last_date, streak FROM daily_checkin WHERE user_id = $1', [user_id])
+    const today = new Date(); today.setUTCHours(0, 0, 0, 0)
+
+    if (row.rows.length === 0) {
+      // первый вход вообще
+      await pool.query(
+        'INSERT INTO daily_checkin (user_id, last_date, streak) VALUES ($1, CURRENT_DATE, 1)', [user_id]
+      )
+      const reward = dailyReward(1)
+      await pool.query(
+        `INSERT INTO coins (user_id, balance) VALUES ($1, $2)
+         ON CONFLICT (user_id) DO UPDATE SET balance = coins.balance + $2`, [user_id, reward]
+      )
+      await logEarn(user_id, reward, 'daily')
+      return res.json({ ok: true, claimed: true, streak: 1, reward, day: 1 })
+    }
+
+    const last = row.rows[0].last_date ? new Date(row.rows[0].last_date) : null
+    if (last) last.setUTCHours(0, 0, 0, 0)
+    let streak = row.rows[0].streak || 0
+
+    const dayMs = 864e5
+    const diffDays = last ? Math.round((today - last) / dayMs) : 999
+
+    if (diffDays === 0) {
+      // уже заходил сегодня — награды нет
+      return res.json({ ok: true, claimed: false, streak, day: streak })
+    }
+
+    // новый день: если вчера был — стрик растёт, иначе сброс на 1
+    streak = diffDays === 1 ? streak + 1 : 1
+    const reward = dailyReward(streak)
+
+    await pool.query(
+      'UPDATE daily_checkin SET last_date = CURRENT_DATE, streak = $2 WHERE user_id = $1', [user_id, streak]
+    )
+    await pool.query(
+      `INSERT INTO coins (user_id, balance) VALUES ($1, $2)
+       ON CONFLICT (user_id) DO UPDATE SET balance = coins.balance + $2`, [user_id, reward]
+    )
+    await logEarn(user_id, reward, 'daily')
+    res.json({ ok: true, claimed: true, streak, reward, day: Math.min(streak, 7) })
+  } catch (err) {
+    console.log('daily-checkin err:', err.message)
+    res.json({ ok: false })
+  }
+})
+
+// Заработок KAKA по дням (для календаря) — из coin_log по датам
+app.get('/daily/:userId', async (req, res) => {
+  try {
+    const rows = await pool.query(
+      `SELECT to_char(created_at, 'YYYY-MM-DD') AS day, SUM(amount)::int AS earned
+       FROM earn_log WHERE user_id = $1 GROUP BY day ORDER BY day DESC LIMIT 60`,
+      [req.params.userId]
+    )
+    res.json(rows.rows)
+  } catch (err) {
+    console.log('daily err:', err.message)
+    res.json([])
   }
 })
 
