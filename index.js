@@ -98,6 +98,16 @@ async function initDb() {
       streak INTEGER DEFAULT 0
     )
   `)
+    await pool.query(`
+    CREATE TABLE IF NOT EXISTS earn_log (
+      id BIGSERIAL PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      amount INTEGER NOT NULL,
+      kind TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `)
+  await pool.query(`CREATE INDEX IF NOT EXISTS earn_log_user_idx ON earn_log (user_id, created_at)`)
   console.log('Таблицы coins, coin_log, owned_skins, taps, daily_checkin готовы ✅')
 }
 
