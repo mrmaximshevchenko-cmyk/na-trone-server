@@ -183,6 +183,43 @@ app.get('/users', async (req, res) => {
   }
 })
 // Недельный рейтинг по числу сеансов (текущая календарная неделя, пн–вс)
+// Рейтинг по балансу KAKA — глобальный (топ-100, не приватные)
+app.get('/leaderboard/balance', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT c.user_id, u.username, u.first_name, u.avatar, c.balance AS count
+      FROM coins c
+      INNER JOIN users u ON u.user_id = c.user_id
+      WHERE u.is_private = FALSE AND c.balance > 0
+      ORDER BY c.balance DESC
+      LIMIT 100
+    `)
+    res.json(result.rows)
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+
+// Рейтинг по балансу среди друзей (+ сам юзер)
+app.get('/leaderboard/balance/friends/:userId', async (req, res) => {
+  try {
+    const uid = req.params.userId
+    const result = await pool.query(`
+      SELECT c.user_id, u.username, u.first_name, u.avatar, c.balance AS count
+      FROM coins c
+      INNER JOIN users u ON u.user_id = c.user_id
+      WHERE c.balance > 0
+        AND (c.user_id = $1 OR c.user_id IN (
+          SELECT following_id FROM follows WHERE follower_id = $1
+        ))
+      ORDER BY c.balance DESC
+      LIMIT 100
+    `, [uid])
+    res.json(result.rows)
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
 app.get('/leaderboard/week', async (req, res) => {
   try {
     const result = await pool.query(`
