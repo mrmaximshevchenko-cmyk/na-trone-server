@@ -118,6 +118,19 @@ async function initDb() {
     )
   `)
   await pool.query(`CREATE INDEX IF NOT EXISTS earn_log_user_idx ON earn_log (user_id, created_at)`)
+  // Заявки на покупку (пресейл)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS purchase_requests (
+      id BIGSERIAL PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      nick TEXT,
+      sol NUMERIC,
+      kaka BIGINT,
+      tx_hash TEXT,
+      status TEXT DEFAULT 'pending',
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `)
   console.log('Таблицы coins, coin_log, owned_skins, taps, daily_checkin готовы ✅')
 }
 
@@ -611,6 +624,55 @@ const APP_URL = 'https://na-trone-app.onrender.com'
 
 app.post('/webhook', async (req, res) => {
   try {
+        // Нажатия inline-кнопок (апрув/отклонить/изменить заявку)
+    const cb = req.body.callback_query
+    if (cb) {
+      const data = cb.data || ''
+      const fromId = String(cb.from.id)
+      if (fromId === String(ADMIN_ID)) {
+        const fmt = (n) => Number(n).toLocaleString('ru-RU')
+        if (data.startsWith('apr_')) {
+          const reqId = data.replace('apr_', '')
+          const r = await approveRequest(reqId)
+          const txt = r ? `✅ Заявка #${reqId} одобрена: ${fmt(r.amount)} $KAKA` : `Заявка #${reqId} уже обработана`
+          await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: ADMIN_ID, text: txt }),
+          })
+        } else if (data.startsWith('rej_')) {
+          const reqId = data.replace('rej_', '')
+          await pool.query('UPDATE purchase_requests SET status = $2 WHERE id = $1 AND status = $3', [reqId, 'rejected', 'pending'])
+          const row = await pool.query('SELECT user_id FROM purchase_requests WHERE id = $1', [reqId])
+          if (row.rows[0]) {
+            const tgId = row.rows[0].user_id.replace('tg_', '')
+            await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: tgId, text: '❌ Заявка отклонена. Проверь данные или напиши в поддержку.' }),
+            }).catch(() => {})
+          }
+          await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: ADMIN_ID, text: `❌ Заявка #${reqId} отклонена` }),
+          })
+        } else if (data.startsWith('edit_')) {
+          const reqId = data.replace('edit_', '')
+          editingAmount[ADMIN_ID] = reqId
+          await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: ADMIN_ID, text: `✏️ Введи сумму $KAKA для заявки #${reqId} (просто число):` }),
+          })
+        }
+      }
+      // подтверждаем нажатие (убрать "часики")
+      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callback_query_id: cb.id }),
+      }).catch(() => {})
+      return res.sendStatus(200)
+    }
+
+    // Инлайн-запрос (шаринг ачивки картинкой)
+    const inlineQuery = req.body.inline_query
     // Инлайн-запрос (шаринг ачивки картинкой)
     const inlineQuery = req.body.inline_query
     if (inlineQuery) {
@@ -661,6 +723,22 @@ app.post('/webhook', async (req, res) => {
     }
 
     const msg = req.body.message
+        // Админ вводит новую сумму для заявки (после кнопки "Изменить")
+    if (msg && msg.text && String(msg.chat.id) === String(ADMIN_ID) && editingAmount[ADMIN_ID]) {
+      const reqId = editingAmount[ADMIN_ID]
+      const amount = parseInt(msg.text.replace(/\D/g, ''), 10)
+      if (amount > 0) {
+        delete editingAmount[ADMIN_ID]
+        const r = await approveRequest(reqId, amount)
+        const fmt = (n) => Number(n).toLocaleString('ru-RU')
+        const txt = r ? `✅ Заявка #${reqId} одобрена: ${fmt(amount)} $KAKA` : `Заявка #${reqId} уже обработана`
+        await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: ADMIN_ID, text: txt }),
+        })
+        return res.sendStatus(200)
+      }
+    }
     if (msg && msg.text && msg.text.startsWith('/start')) {
       const chatId = msg.chat.id
       await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
@@ -697,7 +775,71 @@ app.post('/webhook', async (req, res) => {
     res.sendStatus(200)
   }
 })
+// ===== ЗАЯВКИ НА ПОКУПКУ =====
+const KAKA_PER_SOL = 2000000  // Early Bird: 1 SOL = 2M KAKA
+const editingAmount = {}       // chatId -> requestId (ждём ввод новой суммы)
 
+// Игрок отправляет заявку
+app.post('/purchase-request', async (req, res) => {
+  try {
+    const { user_id, nick, sol, tx_hash } = req.body
+    if (!user_id || !sol || !tx_hash) return res.json({ ok: false })
+    const kaka = Math.round(parseFloat(sol) * KAKA_PER_SOL)
+    const ins = await pool.query(
+      `INSERT INTO purchase_requests (user_id, nick, sol, kaka, tx_hash)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+      [user_id, nick || '', sol, kaka, tx_hash]
+    )
+    const reqId = ins.rows[0].id
+    // уведомление админу с кнопками
+    const fmt = (n) => Number(n).toLocaleString('ru-RU')
+    const text = `💰 <b>Заявка #${reqId}</b>\n\n`
+      + `👤 @${nick || 'аноним'} · <code>${user_id}</code>\n`
+      + `💎 Отправил: <b>${sol} SOL</b> → ${fmt(kaka)} $KAKA\n`
+      + `🔗 Хэш: <code>${tx_hash}</code>\n\n`
+      + `Проверь на solscan.io и реши:`
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: ADMIN_ID, text, parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: [[
+          { text: `✅ Начислить ${fmt(kaka)}`, callback_data: `apr_${reqId}` },
+          { text: '✏️ Изменить', callback_data: `edit_${reqId}` },
+          { text: '❌ Отклонить', callback_data: `rej_${reqId}` },
+        ]] }
+      }),
+    })
+    res.json({ ok: true, id: reqId })
+  } catch (err) {
+    console.log('purchase-request err:', err.message)
+    res.json({ ok: false })
+  }
+})
+
+// Начислить по заявке (апрув)
+async function approveRequest(reqId, kakaAmount) {
+  const r = await pool.query('SELECT * FROM purchase_requests WHERE id = $1 AND status = $2', [reqId, 'pending'])
+  if (r.rows.length === 0) return null
+  const req = r.rows[0]
+  const amount = kakaAmount != null ? kakaAmount : Number(req.kaka)
+  await pool.query('UPDATE purchase_requests SET status = $2, kaka = $3 WHERE id = $1', [reqId, 'approved', amount])
+  await pool.query(
+    `INSERT INTO coins (user_id, balance) VALUES ($1, $2)
+     ON CONFLICT (user_id) DO UPDATE SET balance = coins.balance + $2`, [req.user_id, amount]
+  )
+  await logEarn(req.user_id, amount, 'purchase')
+  // уведомить игрока
+  const tgId = req.user_id.replace('tg_', '')
+  const fmt = (n) => Number(n).toLocaleString('ru-RU')
+  await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: tgId, text: `✅ Начислено ${fmt(amount)} $KAKA! Добро пожаловать в Early Bird 👑` }),
+  }).catch(() => {})
+  return { user_id: req.user_id, amount }
+}
+
+// ID владельца для /admin
 // ID владельца для /admin
 const ADMIN_ID = process.env.ADMIN_ID || '99505016'
 
