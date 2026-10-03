@@ -677,12 +677,90 @@ app.post('/webhook', async (req, res) => {
         }),
       })
     }
+
+    // ===== АДМИНКА (только для владельца) =====
+    if (msg && msg.text && msg.text.startsWith('/admin')) {
+      const chatId = msg.chat.id
+      if (String(chatId) === String(ADMIN_ID)) {
+        const text = await buildAdminReport()
+        await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
+        })
+      }
+    }
+
     res.sendStatus(200)
   } catch (err) {
     console.log('Ошибка webhook:', err.message)
     res.sendStatus(200)
   }
 })
+
+// ID владельца для /admin
+const ADMIN_ID = process.env.ADMIN_ID || '99505016'
+
+// Сбор метрик для админки
+async function buildAdminReport() {
+  try {
+    const fmt = (n) => Number(n || 0).toLocaleString('ru-RU')
+    const q = async (sql, params) => (await pool.query(sql, params)).rows[0]
+
+    const users = await q(`SELECT COUNT(*) AS n FROM users`)
+    const newToday = await q(`SELECT COUNT(*) AS n FROM users WHERE updated_at >= CURRENT_DATE`)
+    const newWeek = await q(`SELECT COUNT(*) AS n FROM users WHERE updated_at >= date_trunc('week', NOW())`)
+
+    const actToday = await q(`
+      SELECT COUNT(DISTINCT user_id) AS n FROM (
+        SELECT user_id FROM sessions WHERE to_timestamp(id/1000.0) >= CURRENT_DATE
+        UNION SELECT user_id FROM taps WHERE tap_date = CURRENT_DATE
+      ) t`)
+    const actWeek = await q(`
+      SELECT COUNT(DISTINCT user_id) AS n FROM (
+        SELECT user_id FROM sessions WHERE to_timestamp(id/1000.0) >= date_trunc('week', NOW())
+        UNION SELECT user_id FROM taps WHERE tap_date >= date_trunc('week', NOW())
+      ) t`)
+
+    const ret = await q(`
+      SELECT COUNT(*) AS n FROM (
+        SELECT user_id FROM taps WHERE tap_date = CURRENT_DATE
+        INTERSECT
+        SELECT user_id FROM taps WHERE tap_date = CURRENT_DATE - 1
+      ) t`)
+
+    const bal = await q(`SELECT COALESCE(SUM(balance),0) AS total, COALESCE(AVG(balance),0) AS avg FROM coins`)
+    const sess = await q(`SELECT COUNT(*) AS n FROM sessions`)
+    const tapsTotal = await q(`SELECT COALESCE(SUM(earned),0) AS n FROM taps`)
+    const refs = await q(`SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE activated) AS act FROM referrals`)
+    const streak3 = await q(`SELECT COUNT(*) AS n FROM daily_checkin WHERE streak >= 3`)
+
+    const top = await pool.query(`
+      SELECT u.username, u.first_name, c.balance
+      FROM coins c JOIN users u ON u.user_id = c.user_id
+      ORDER BY c.balance DESC LIMIT 5`)
+    const topText = top.rows.map((r, i) =>
+      `${i + 1}. @${r.username || r.first_name || 'аноним'} — ${fmt(r.balance)}`
+    ).join('\n') || '—'
+
+    return `👑 <b>АДМИНКА · Трон</b>
+
+👥 Юзеры: <b>${fmt(users.n)}</b> (+${fmt(newToday.n)} сегодня, +${fmt(newWeek.n)} за неделю)
+🔥 Активны: <b>${fmt(actToday.n)}</b> сегодня · ${fmt(actWeek.n)} за неделю
+♻️ Вернулись: <b>${fmt(ret.n)}</b> (тапали вчера+сегодня)
+
+💰 Баланс: <b>${fmt(bal.total)}</b> $KAKA · ${fmt(Math.round(bal.avg))} средний
+📊 Сеансов: ${fmt(sess.n)} · Натапано: ${fmt(tapsTotal.n)} $KAKA
+⚡ На стрике 3+: <b>${fmt(streak3.n)}</b>
+
+🤝 Рефералы: ${fmt(refs.total)} связей · <b>${fmt(refs.act)}</b> активно
+
+🏆 <b>Топ-5 по балансу:</b>
+${topText}`
+  } catch (err) {
+    return 'Ошибка сбора метрик: ' + err.message
+  }
+}
 // ===== МАГАЗИН СКИНОВ =====
 
 // Конфиг скинов. tier: common/rare/epic/legendary/mythic. free: бесплатные (текущие авы)
