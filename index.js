@@ -342,7 +342,6 @@ app.post('/invite', async (req, res) => {
   }
 })
 
-app.post('/follow', async (req, res) => {
 // Добавить в друзья (взаимно — обе записи)
 app.post('/follow', async (req, res) => {
   try {
@@ -872,7 +871,6 @@ async function activateReferral(invitedId) {
   } catch (err) { console.log('activateReferral err:', err.message) }
 }
 
-async function logEarn(userId, amount, kind) {
 // Начислить монеты (с защитой от повтора через coin_log)
 async function logEarn(userId, amount, kind) {
   try {
