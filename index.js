@@ -671,8 +671,7 @@ app.post('/webhook', async (req, res) => {
       return res.sendStatus(200)
     }
 
-    // Инлайн-запрос (шаринг ачивки картинкой)
-    const inlineQuery = req.body.inline_query
+
     // Инлайн-запрос (шаринг ачивки картинкой)
     const inlineQuery = req.body.inline_query
     if (inlineQuery) {
