@@ -1143,14 +1143,30 @@ app.get('/tap-state/:userId', async (req, res) => {
     const t = await pool.query(
       "SELECT earned FROM taps WHERE user_id = $1 AND tap_date = CURRENT_DATE", [uid]
     )
+    // daily-стрик + награда за следующий день
+    const rewards = [100, 200, 350, 500, 700, 850, 1000]
+    const dc = await pool.query('SELECT last_date, streak FROM daily_checkin WHERE user_id = $1', [uid])
+    let dailyStreak = dc.rows[0]?.streak || 0
+    // если вчера не заходил и не сегодня — стрик фактически сбросится при след. чек-ине
+    const last = dc.rows[0]?.last_date ? new Date(dc.rows[0].last_date) : null
+    if (last) {
+      last.setUTCHours(0,0,0,0)
+      const today = new Date(); today.setUTCHours(0,0,0,0)
+      const diff = Math.round((today - last) / 864e5)
+      if (diff > 1) dailyStreak = 0  // стрик прерван
+    }
+    const nextDay = Math.min(dailyStreak + 1, rewards.length)
+    const nextReward = rewards[nextDay - 1]
     res.json({
       tapPower: c.rows[0]?.tap_power || 1,
       earnedToday: t.rows[0]?.earned || 0,
       dailyLimit: DAILY_TAP_LIMIT,
+      dailyStreak,
+      nextReward,
     })
   } catch (err) {
     console.log('tap-state err:', err.message)
-    res.json({ tapPower: 1, earnedToday: 0, dailyLimit: DAILY_TAP_LIMIT })
+    res.json({ tapPower: 1, earnedToday: 0, dailyLimit: DAILY_TAP_LIMIT, dailyStreak: 0, nextReward: 100 })
   }
 })
 
