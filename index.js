@@ -769,10 +769,10 @@ app.post('/webhook', async (req, res) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: chatId,
-          text: 'Добро пожаловать на трон, Ваше Величество!',
+          text: '👑 Welcome to the Throne, Your Majesty!\n\nThe silliest poop game on Telegram 💩 Track, compete, collect golden coins and rule the throne!\n\nTap below to play 👇',
           reply_markup: {
             inline_keyboard: [[
-              { text: 'Занять трон 👑', web_app: { url: APP_URL } }
+              { text: 'Take the Throne 👑', web_app: { url: APP_URL } }
             ]]
           }
         }),
