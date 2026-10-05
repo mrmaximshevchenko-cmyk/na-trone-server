@@ -898,6 +898,7 @@ async function buildAdminReport() {
     const sess = await q(`SELECT COUNT(*) AS n FROM sessions`)
     const tapsTotal = await q(`SELECT COALESCE(SUM(earned),0) AS n FROM taps`)
     const refs = await q(`SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE activated) AS act FROM referrals`)
+    const purchases = await q(`SELECT COALESCE(SUM(sol),0) AS sol, COUNT(*) FILTER (WHERE status='approved') AS approved, COUNT(*) FILTER (WHERE status='pending') AS pending FROM purchase_requests`)
     const streak3 = await q(`SELECT COUNT(*) AS n FROM daily_checkin WHERE streak >= 3`)
 
     const top = await pool.query(`
@@ -919,6 +920,7 @@ async function buildAdminReport() {
 ⚡ На стрике 3+: <b>${fmt(streak3.n)}</b>
 
 🤝 Рефералы: ${fmt(refs.total)} связей · <b>${fmt(refs.act)}</b> активно
+💎 Собрано: <b>${Number(purchases.sol).toFixed(2)} SOL</b> · ${fmt(purchases.approved)} одобрено${Number(purchases.pending) > 0 ? ` · ⏳ ${fmt(purchases.pending)} ждут` : ''}
 
 🏆 <b>Топ-5 по балансу:</b>
 ${topText}`
