@@ -42,6 +42,7 @@ async function initDb() {
   // На случай если таблица уже была — добавим колонку
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_private BOOLEAN DEFAULT FALSE`)
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_friends BOOLEAN DEFAULT TRUE`)
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS lang TEXT DEFAULT 'en'`)
   console.log('Таблица users готова ✅')
 
   await pool.query(`
@@ -182,16 +183,17 @@ app.get('/sessions/:userId', async (req, res) => {
 // Зарегистрировать / обновить пользователя (при входе)
 app.post('/user', async (req, res) => {
   try {
-    const { user_id, username, first_name, avatar } = req.body
+    const { user_id, username, first_name, avatar, lang } = req.body
     await pool.query(
-      `INSERT INTO users (user_id, username, first_name, avatar, updated_at)
-       VALUES ($1, $2, $3, $4, NOW())
+      `INSERT INTO users (user_id, username, first_name, avatar, lang, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
        ON CONFLICT (user_id) DO UPDATE SET
          username = EXCLUDED.username,
          first_name = EXCLUDED.first_name,
          avatar = EXCLUDED.avatar,
+         lang = EXCLUDED.lang,
          updated_at = NOW()`,
-      [user_id, username, first_name, avatar]
+      [user_id, username, first_name, avatar, lang || 'en']
     )
     res.json({ ok: true })
   } catch (err) {
@@ -562,7 +564,27 @@ app.post('/notify-setting', async (req, res) => {
 })
 
 // Тексты уведомлений о друзьях (рандом)
-const FRIEND_NOTIFS = [
+const FRIEND_NOTIFS_RU = [
+  'Милорд, ваш подданный {друг} только что встал с трона. А вы когда соизволите? 👑',
+  '👑 {друг} исполнил свой королевский долг. Не отставайте, Ваше Величество!',
+  '💩 {друг} только что покорил трон. Престол ждёт и вас!',
+  'Внимание, двор! {друг} совершил визит на трон. Ваш ход, монарх 👑',
+  '🚽 {друг} отметился на престоле. А ваш трон пылится?',
+  'Милорд, {друг} опережает вас на один поход. Терпимо ли это? 🔥',
+  'Слухи по королевству: {друг} сходил на трон. Пора и вам, Ваше Величество 💩',
+  '🔔 {друг} занял престол. Корона зовёт и вас!',
+  '{друг} совершил великое дело на троне. А чем похвастаетесь вы? 👑',
+  '💩 Пока вы медлите, {друг} уже покорил трон. Догоняйте!',
+  'Ваше Величество, {друг} только что отрёкся от трона (временно). Престол свободен! 👑',
+  '🚽 {друг} справил королевскую нужду. Не пора ли и вам на аудиенцию?',
+  'Депеша из уборной: {друг} на троне. Ваш престол скучает 👑',
+  '🔥 {друг} вырвался вперёд одним походом. Так и будете смотреть?',
+  '👑 Придворные шепчутся: {друг} снова на троне. Составите компанию?',
+  '{друг} совершил акт державной важности на троне. Ваш выход, монарх! 💩',
+  'Милорд, {друг} только что короновался на фарфоровом престоле. Не отставайте 👑',
+]
+
+const FRIEND_NOTIFS_EN = [
   'Милорд, ваш подданный {друг} только что встал с трона. А вы когда соизволите? 👑',
   '👑 {друг} исполнил свой королевский долг. Не отставайте, Ваше Величество!',
   '💩 {друг} только что покорил трон. Престол ждёт и вас!',
@@ -593,24 +615,26 @@ async function notifyFriendsAboutSession(authorId, sessionId) {
 
     // Кто подписан на автора (его друзья) и у кого включены уведомления
     const friendsRes = await pool.query(
-      `SELECT u.user_id FROM follows f
+      `SELECT u.user_id, u.lang FROM follows f
        INNER JOIN users u ON u.user_id = f.follower_id
        WHERE f.following_id = $1 AND u.notify_friends = TRUE`,
       [authorId]
     )
 
-    const authorName = author.username || author.first_name || 'Кто-то'
+    const authorName = author.username || author.first_name || 'Someone'
     for (const row of friendsRes.rows) {
       const chatId = row.user_id.replace('tg_', '')
       if (!/^\d+$/.test(chatId)) continue // только реальные tg-id
-      const text = FRIEND_NOTIFS[Math.floor(Math.random() * FRIEND_NOTIFS.length)].replace('{друг}', authorName)
+      const arr = row.lang === 'ru' ? FRIEND_NOTIFS_RU : FRIEND_NOTIFS_EN
+      const text = arr[Math.floor(Math.random() * arr.length)].replace('{друг}', authorName)
+      const btnText = row.lang === 'ru' ? 'Занять трон 👑' : 'Take the Throne 👑'
       await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: chatId,
           text,
-          reply_markup: { inline_keyboard: [[{ text: 'Занять трон 👑', web_app: { url: APP_URL } }]] },
+          reply_markup: { inline_keyboard: [[{ text: btnText, web_app: { url: APP_URL } }]] },
         }),
       })
     }
